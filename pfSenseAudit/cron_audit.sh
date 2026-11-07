@@ -22,7 +22,7 @@
 #   7. related boot persistence: <shellcmd>/<earlyshellcmd> in config.xml, rc.d scripts
 #   8. diff against baseline
 #
-# Out of scope and skipped (rules 6/14): whiteteam, DataDog (dd-agent, ddagentuser,
+# Out of scope and skipped (rules 6/14): whiteteam, blackteam, DataDog (dd-agent, ddagentuser,
 # anything named datadog). syslog-ng is analysed but never offered for cleanup.
 
 CRONTAB="${CRONTAB:-/etc/crontab}"
@@ -57,7 +57,7 @@ STOCK="*/11 * * * *|operator|/usr/libexec/save-entropy
 30 5 1 * *|root|periodic monthly
 1,31 0-5 * * *|root|adjkerntz -a"
 
-OOS_RE='whiteteam|datadog|dd-agent|ddagentuser'
+OOS_RE='whiteteam|blackteam|datadog|dd-agent|ddagentuser'
 PROT_RE='syslog-ng'
 
 # reverse shells / obvious backdoors -> CRITICAL

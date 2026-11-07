@@ -61,13 +61,13 @@ NOTES
   * No floating rules are created. Existing floating rules are only reported (WARN).
   * Scorer discovery: ALLOWED_IPS (network alias) is created ONCE, seeded with 10.64.0.0/16,
     and never overwritten. Scored rules log. Replace the /16 with exact IPs in the GUI when
-    found. BLOCKED_IPS / ALLOWED_SITES / AI_SITES are also created once, never overwritten.
+    found. BLOCKED_IPS / ALLOWED_SITES are also created once, never overwritten.
   * Rule port fields use hyphen ranges (5985-5986); alias ranges use the separator set by
     ALIAS_PORT_SEP in the script.
   * DNS_SERVERS (host alias: router, pitwall, 1.1.1.1) is also created once; every client may
     reach it on port 53, and 1.1.1.1 is allowed on all protocols.
-  * ok-research (CSEC-720-RESEARCH-DO-NOT-DELETE) allows any source -> 10.64.250.228:9000.
-    verify raises CRIT if it is ever missing or modified.
+  * DataDog: $DD_URL is a newline-separated CIDR list (IPv4+IPv6) that pfSense urltable
+    natively supports. The urltable alias is created once before any rule references it.
   * Rules are tagged F1SH:S<stage>:<id>. Old IRSEC-tagged rules are removed on next apply.
   * State/backups/alerts: /root/irsec_fw/
 
@@ -90,18 +90,14 @@ $ALLOWED_SEED    = "10.64.0.0/16"; // initial ALLOWED_IPS content (scorer discov
 $FTP_PASV        = "";           // e.g. "40000-40100" to enable the FTP passive-data rule (off if empty)
 $PITWALL_DNS_FWD = "any";        // narrow to pitwall's DNS forwarder IP once known
 $TEMP_WEB        = true;         // TEMP LAN->any 80/443 (remove with: remove-temp)
-$ALLOW_AI_SITES  = false;        // claude.ai/chatgpt.com/gemini - see Rules 12 and 23 before enabling
 $LOCK_DELAY      = 600;          // seconds after stage1 before lockdown is allowed (10 min)
 $CONFIRM_WINDOW  = 120;          // seconds to type KEEP after lockdown before auto-rollback
 $RULE_PORT_SEP   = "-";          // port ranges inside RULES (GUI saves hyphen)
 $ALIAS_PORT_SEP  = ":";          // port ranges inside port ALIASES
 $ALLOWED_SITES   = ["google.com","www.google.com","docs.google.com","www.gstatic.com","www.youtube.com",
-                    "clients2.google.com","f1-sh.duckdns.org","f-1sh.duckdns.org"];
-$AI_SITES        = ["claude.ai","chatgpt.com","gemini.google.com"];
-$RESEARCH_IP     = "10.64.250.228"; // CSEC-720-RESEARCH-DO-NOT-DELETE: all traffic to this IP:port is allowed
-$RESEARCH_PORT   = "9000";
+                    "clients2.google.com","claude.ai","chatgpt.com","gemini.google.com","f-1sh.duckdns.org"];
 $DD              = "DataDog_IP_Table";
-$DD_URL          = "https://f-1sh.duckdns.org/downloads/us5-datadog.txt";
+$DD_URL          = "https://f-1sh.duckdns.org/downloads/us5-datadog.txt"; // newline-separated CIDR (IPv4+IPv6), pfSense urltable native
 $DIR             = "/root/irsec_fw";
 /* ============================================== */
 
@@ -222,13 +218,12 @@ function f1_create_once($name, $type, $addr, $descr) {   // user-edited lists: n
   if (f1_find_alias($name) === null) f1_set_alias($name, $type, $addr, $descr);
 }
 function f1_ensure_aliases() {
-  global $ALLOWED_SEED, $ALLOWED_SITES, $AI_SITES, $DNS_DEFAULT;
+  global $ALLOWED_SEED, $ALLOWED_SITES, $DNS_DEFAULT;
   foreach (f1_alias_defs() as $n => $d) f1_set_alias($n, $d[0], $d[1], 'F1SH fw managed');
   f1_create_once('BLOCKED_IPS', 'host', '192.0.2.1', 'confirmed malicious IPs ONLY (seeded w/ doc addr)');
   f1_create_once('ALLOWED_IPS', 'network', $ALLOWED_SEED, 'scorer source IPs; seeded with the /16 for discovery - replace with exact IPs');
-  f1_create_once('ALLOWED_SITES', 'host', implode(' ', $ALLOWED_SITES), 'websites LAN hosts may reach on 80/443');
+  f1_create_once('ALLOWED_SITES', 'host', implode(' ', $ALLOWED_SITES), 'websites LAN hosts may reach on 80/443 (incl. AI chat sites)');
   f1_create_once('DNS_SERVERS', 'host', implode(' ', $DNS_DEFAULT), 'DNS servers every client may use (router, pitwall, 1.1.1.1) - edit freely');
-  f1_create_once('AI_SITES', 'host', implode(' ', $AI_SITES), 'AI chatbot sites (rule off unless ALLOW_AI_SITES)');
 }
 function f1_dd_count() {
   global $DD;
@@ -263,7 +258,7 @@ function f1_ensure_dd_alias() {   // runs BEFORE any rule references the alias
 
 /* ---------------- rule table (interface rules only, no floating) ---------------- */
 function f1_rule_defs($upto) {
-  global $IP, $NETBIRD, $MGMT, $RESEARCH_IP, $RESEARCH_PORT, $FTP_PASV, $PITWALL_DNS_FWD, $TEMP_WEB, $ALLOW_AI_SITES, $NODENY, $DD, $state;
+  global $IP, $NETBIRD, $MGMT, $FTP_PASV, $PITWALL_DNS_FWD, $TEMP_WEB, $NODENY, $DD, $state;
   $R = [];
   $A = function ($st, $id, $type, $if, $proto, $src, $dst, $dport, $descr, $o = []) use (&$R) {
     $R[] = array_merge(compact('st','id','type','if','proto','src','dst','dport','descr'), $o);
@@ -281,7 +276,6 @@ function f1_rule_defs($upto) {
   $A(1,'ok-dns-lan','pass','lan','tcp/udp','any','DNS_SERVERS','53','All clients -> DNS_SERVERS (LAN side)');
   $A(1,'ok-dns-wan','pass','wan','tcp/udp','any','DNS_SERVERS','53','All clients -> DNS_SERVERS (WAN side)');
   $A(1,'ok-cf','pass','lan','any','any','1.1.1.1','','Allow 1.1.1.1 (all protocols: ping, DoT, DoH)');
-  $A(1,'ok-research','pass','lan','tcp/udp','any',$RESEARCH_IP,$RESEARCH_PORT,'CSEC-720-RESEARCH-DO-NOT-DELETE');
   $A(1,'bl-wan','block','wan','any','BLOCKED_IPS','any','','BLOCKED_IPS in',['log'=>1]);
   $A(1,'bl-lan','block','lan','any','any','BLOCKED_IPS','','BLOCKED_IPS out',['log'=>1]);
   // ---- Stage 2: scored services (confirmed ports), source = ALLOWED_IPS, logged for discovery
@@ -308,8 +302,7 @@ function f1_rule_defs($upto) {
   $A(3,'l-ga-sc','pass','lan','tcp',$IP['garage'],$IP['scrutineering'],'22','garage -> scrutineering SSH');
   $A(3,'l-icmp','pass','lan','icmp','LAN_HOSTS_IND','CLOUD_HOSTS_IND','','LAN->Cloud ping');
   $A(3,'l-dns','pass','lan','tcp/udp',$IP['pitwall'],$PITWALL_DNS_FWD,'53','pitwall upstream DNS');
-  $A(3,'l-sites','pass','lan','tcp','LAN_HOSTS_IND','ALLOWED_SITES','PORTS_WEB','allowed websites');
-  $A(3,'l-ai','pass','lan','tcp','LAN_HOSTS_IND','AI_SITES','PORTS_WEB','AI chatbot sites (Rules 12/23!)',['off'=>!$ALLOW_AI_SITES]);
+  $A(3,'l-sites','pass','lan','tcp','LAN_HOSTS_IND','ALLOWED_SITES','PORTS_WEB','allowed websites (incl. AI chat sites)');
   $A(3,'temp-web','pass','lan','tcp','LAN_HOSTS_IND','any','PORTS_WEB','TEMP tool downloads - remove-temp',['log'=>1]);
   // ---- Stage 4: deny rules (manual lockdown only), all logged
   $A(4,'d-self-lan','block','lan','any','any','(self)','','Deny traffic to barrier (LAN)',['log'=>1]);
@@ -351,7 +344,7 @@ function f1_file_checks() {
   return $bad;
 }
 function f1_env_checks($n) {
-  global $config, $TEAM, $LAB, $ALLOW_AI_SITES;
+  global $config, $TEAM, $LAB;
   $v = trim((string)@file_get_contents('/etc/version'));
   if (strpos($v, '2.7.2') !== 0) f1_alert('WARN', "pfSense version '$v' (script written for 2.7.2)");
   $w = function_exists('get_interface_ip') ? (string)get_interface_ip('wan') : '';
@@ -373,7 +366,6 @@ function f1_env_checks($n) {
   if (!empty($config['nat']['onetoone'])) f1_alert('WARN', '1:1 NAT entries present - review');
   if (!empty($config['ifgroups']['ifgroupentry'])) f1_alert('WARN', 'interface groups exist (group rules run BEFORE interface rules) - review');
   if (isset($config['syslog']['nologdefaultblock'])) f1_alert($n >= 4 ? 'WARN' : 'INFO', 'default-block logging is OFF (Status > System Logs > Settings)');
-  if ($ALLOW_AI_SITES && !$LAB) f1_alert('WARN', 'ALLOW_AI_SITES is on: Rule 23 only allows AI chatbots on your physical competitor machine/personal device, and Rule 12 forbids exfiltration');
   f1_alert('INFO', 'Not machine-checkable here: Ethernet (L2) rules tab, NAT source seen by Cloud hosts (Diagnostics > States), host firewalls');
 }
 function f1_verify($n) {
